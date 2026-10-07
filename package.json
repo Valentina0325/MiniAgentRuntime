@@ -1,0 +1,37 @@
+{
+  "name": "mini-agent-runtime",
+  "version": "1.0.0",
+  "description": "可扩展的 TypeScript Agent 运行时框架：零依赖（不依赖 LangChain），具备 Agent 主循环、工具分区调度、MCP 集成、上下文工程、Checkpoint 恢复与运行时可观测性。",
+  "type": "module",
+  "scripts": {
+    "build": "tsc",
+    "agent": "tsx src/cli/index.ts",
+    "start": "tsx src/cli/index.ts",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"src/**/*.ts\""
+  },
+  "keywords": [
+    "agent",
+    "runtime",
+    "typescript",
+    "mcp",
+    "llm",
+    "zhipu"
+  ],
+  "license": "MIT",
+  "dependencies": {
+    "openai": "^4.56.0",
+    "zod": "^3.23.8"
+  },
+  "devDependencies": {
+    "@eslint/js": "^9.13.0",
+    "@types/node": "^20.19.43",
+    "eslint": "^9.13.0",
+    "eslint-config-prettier": "^9.1.0",
+    "prettier": "^3.3.3",
+    "tsx": "^4.19.0",
+    "typescript": "^5.5.0",
+    "typescript-eslint": "^8.10.0"
+  }
+}

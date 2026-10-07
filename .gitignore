@@ -1,0 +1,13 @@
+# 依赖与构建产物
+node_modules/
+dist/
+
+# 密钥（切勿提交）
+.env
+
+# Checkpoint 会话数据（运行时生成）
+sessions/
+
+# 工具与调试产物
+.workbuddy/
+*.log
