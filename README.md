@@ -1,184 +1,209 @@
 # MiniAgentRuntime
 
-## 项目定位
+> 一个**零依赖**（不依赖 LangChain 或任何 Agent 框架）的 TypeScript Agent 运行时。自己实现 Agent 主循环、工具调度、上下文压缩、Checkpoint 恢复与可观测上报——适合想看清「Agent 运行时到底怎么转」的开发者直接读源码、改源码。
 
-**MiniAgentRuntime** 是一个**零依赖**（不依赖 LangChain 或任何 Agent 框架）的 TypeScript Agent 运行时框架。它用最小实现验证 Agent 运行时的底层机制：
+如果想先建立整体认知，见同仓库的 [`MiniAgentRuntime 项目介绍书.md`](./MiniAgentRuntime%20项目介绍书.md)（定位、架构、对外契约、接手阅读顺序）。
 
-- **Agent 主循环**：工具调用循环如何终止
-- **工具分区调度**：只读工具并行、写入工具串行的保守策略
-- **MCP 协议集成**：外部工具通过 Model Context Protocol 标准化接入
-- **上下文工程**：历史膨胀如何压缩
-- **Checkpoint 恢复**：崩溃后如何从断点续跑
-- **运行时可观测性**：调用链路如何上报到 AgentLens 后端
+## 特性
 
-它刻意不封装任何高级抽象，目的是「看懂运行时本身」——并与 [AgentLens](https://github.com/) 可观测后端形成闭环。
+- **Agent 主循环**：ReAct 式「LLM 决策 → 调用工具 → 回贴结果」循环，任务完成自然终止。
+- **工具分区调度**：只读工具并行执行、含写入工具时串行执行。
+- **上下文压缩**：对话 token 超阈值时，早期历史被摘要为单条消息，保留最近若干轮。
+- **Checkpoint 恢复**：每批工具调用后把会话落盘到 `sessions/`，崩溃后可断点续跑。
+- **MCP 集成**：通过 stdio + JSON-RPC 接入标准 MCP 工具服务器（如官方 filesystem server）。
+- **可观测性**：每次 LLM 调用的 span（模型 / token / 延迟 / 状态）上报到 AgentLens 后端，失败不阻塞主流程。
 
 ## 技术栈
 
-| 维度 | 选型 | 说明 |
-| :--- | :--- | :--- |
-| 语言 | TypeScript 5.x | 严格模式 |
-| 运行时 | Node.js 20+ | 原生提供 `fetch` / `fs` / `child_process` |
-| LLM SDK | `openai` | 指向智谱（Zhipu）OpenAI 兼容端点 |
-| 数据校验 | `zod` | 工具参数运行时校验 |
-| 禁止 | LangChain.js / 任何 Agent 框架 | 本项目要自己实现运行时 |
-| 允许 | Node 原生 `fs` / `child_process` / `fetch` / `readline` | 不引入额外框架 |
+| 维度 | 选型 |
+| :--- | :--- |
+| 语言 | TypeScript 5（strict 模式） |
+| 运行时 | Node.js 20+（原生 `fs` / `child_process` / `fetch`） |
+| LLM SDK | `openai`（指向智谱 OpenAI 兼容端点） |
+| 参数校验 | `zod` |
+| 明确禁止 | LangChain.js / 任何 Agent 框架 |
+| 构建运行 | `typescript` + `tsx`（开发依赖，非运行时依赖） |
+| 代码规范 | ESLint（`typescript-eslint`）+ Prettier |
 
-> 注意：开发依赖中包含 `tsx`（用于直接运行 TS）与 `typescript` / `@types/node`，它们不是「Agent 框架」，仅用于构建与运行。
+## 安装
 
-## 目录结构
-
-```
-mini-agent-runtime/
-├── src/
-│   ├── core/
-│   │   ├── agent.ts          # Agent 主循环
-│   │   ├── scheduler.ts       # 工具分区调度（只读并行/写入串行）
-│   │   ├── context.ts         # 上下文工程（历史压缩）
-│   │   └── checkpoint.ts      # JSONL Checkpoint 持久化
-│   ├── tools/
-│   │   ├── registry.ts        # 工具注册表
-│   │   └── builtin/
-│   │       ├── read_file.ts   # 只读工具
-│   │       ├── list_dir.ts    # 只读工具
-│   │       ├── search_text.ts # 只读工具
-│   │       └── write_file.ts  # 写入工具
-│   ├── mcp/
-│   │   ├── client.ts          # 最小化 MCP 客户端（stdio + JSON-RPC）
-│   │   └── adapter.ts         # MCP 工具 → ToolDefinition 适配
-│   ├── observability/
-│   │   └── reporter.ts        # 向 AgentLens 上报 span
-│   ├── cli/
-│   │   └── index.ts           # CLI 入口
-│   └── types.ts               # 公共类型定义
-├── src/utils/schema.ts        # zod → JSON Schema 转换（工具用）
-├── sessions/                  # Checkpoint 存储目录（运行时生成）
-├── package.json
-├── tsconfig.json
-├── .env.example
-└── README.md
+```bash
+npm install
 ```
 
-## 快速开始
+## 配置
 
-1. **安装依赖**
-   ```bash
-   npm install
-   ```
-2. **配置环境**：复制 `.env.example` 为 `.env`，填入智谱 API Key
-   ```bash
-   cp .env.example .env
-   # 然后编辑 .env，填入 ZHIPU_API_KEY=你的真实Key
-   ```
-3. **（可选）启动 AgentLens 可观测后端**
-   ```bash
-   cd <AgentLens 项目目录> && uvicorn backend.main:app --reload
-   ```
-4. **运行 Agent**
-   ```bash
-   npm run agent -- "读取 README.md 和 package.json，合并写入 summary.txt"
-   ```
+把 `.env.example` 复制为 `.env` 并填入 Key：
 
-## 演示场景
+```bash
+cp .env.example .env
+```
 
-### 演示 1：读取并合并写入（AC7 混合调度）
+| 变量 | 必填 | 默认 | 说明 |
+| :--- | :--- | :--- | :--- |
+| `ZHIPU_API_KEY` | 是 | — | 智谱 OpenAI 兼容接口 Key |
+| `ZHIPU_MODEL` | 否 | `glm-4-flash` | 模型名（可改 `glm-4` / `glm-4-plus` 等） |
+| `ZHIPU_BASE_URL` | 否 | `https://open.bigmodel.cn/api/paas/v4` | 智谱端点，也兼容任意 OpenAI 兼容端点 |
+| `AGENTLENS_BASE` | 否 | `http://localhost:8000` | AgentLens 可观测后端地址 |
+
+> 缺 `ZHIPU_API_KEY` 时运行时直接报错退出，不会空跑。
+
+## 快速运行
 
 ```bash
 npm run agent -- "读取 README.md 和 package.json，合并写入 summary.txt"
 ```
 
-预期输出（节选）：
+可用的 npm 脚本：
 
-```
-[Agent] 开始执行...
-[Step 1] LLM 请求 2 个工具: read_file, read_file
-[调度] 全只读 → 并行执行... 完成 (120ms)
-[Step 2] LLM 请求 1 个工具: write_file
-[调度] 含写入 → 串行执行... 完成 (15ms)
-[Step 3] 任务完成
-
-========== Agent 最终回答 ==========
-（此处是 LLM 给出的总结文本，任务结束后直接打印在终端）
-====================================
-[AgentLens] 已上报 3 条 span
-```
-
-> **在哪里看结果？**
-> - **最终回答**：任务自然终止后直接打印在终端（`========== Agent 最终回答 ==========` 区块）。
-> - **回看历史会话**：`npm run agent -- --show <sessionId>`，可完整重现「用户提问 → Agent 请求工具 → 工具返回 → 最终回答」。`sessionId` 可写完整 `sess-<时间戳>`，也可只写后面的数字。
-> - **会话原始记录**：`sessions/<sessionId>.jsonl`，每行一条 JSON 消息。
-> - **遥测数据**（token / 成本 / 延迟，不含回答内容）：需启动 AgentLens，看 `http://localhost:8000/`。
-
-### 演示 2：断点恢复（AC13）
-
-先运行任意任务得到 `sessionId`（控制台会打印），然后：
-
-```bash
-npm run agent -- --resume sess-<时间戳>
-```
-
-会从最近的 Checkpoint 继续，而不是从头开始。
-
-### 演示 3：接入 MCP 文件系统服务器（AC8–AC10）
-
-```bash
-npm run agent -- --mcp "用 MCP 工具读取 README.md 的前 20 行并列出当前目录"
-```
-
-启动官方 `@modelcontextprotocol/server-filesystem`，完成 `initialize` 后列出其工具，
-Agent 即可像调用内置工具一样调用 MCP 工具（如 `read_file`）。
-
-### 演示 4：强制触发上下文压缩（AC11）
-
-```bash
-npm run agent -- --max-tokens 50 "反复读取大文件并总结"
-```
-
-将 token 上限压到很低，可观察到 `[上下文] 触发压缩...` 日志与历史摘要。
+| 脚本 | 作用 |
+| :--- | :--- |
+| `npm run agent` / `npm run start` | 运行 CLI（`tsx` 直接跑 TS 源码） |
+| `npm run build` | `tsc` 编译到 `dist/` |
+| `npm run lint` | ESLint 检查 |
+| `npm run lint:fix` | ESLint 自动修复 |
+| `npm run format` | Prettier 格式化 |
 
 ## CLI 用法
 
-| 命令 | 说明 |
+`npm run agent --` 之后跟任务描述或子命令：
+
+| 参数 | 说明 |
 | :--- | :--- |
-| `npm run agent -- "<任务描述>"` | 作为新会话运行 Agent |
-| `npm run agent -- --resume <sessionId>` | 从 Checkpoint 断点续跑（可省略 `sess-` 前缀） |
-| `npm run agent -- --list-sessions` | 列出所有历史会话 |
-| `npm run agent -- --show <sessionId>` | 查看某次会话的完整对话（可省略 `sess-` 前缀） |
-| `npm run agent -- --mcp "<任务描述>"` | 启用 MCP filesystem server 后运行 |
-| `npm run agent -- --mcp --mcp-dir <目录>` | 指定 MCP 允许访问的目录 |
-| `npm run agent -- --max-tokens <N>` | 覆盖上下文压缩 token 上限（便于测试） |
-| `npm run build` | TypeScript 编译（验收 AC1） |
+| `"<任务描述>"` | 作为新会话运行 Agent |
+| `--resume <sessionId>` | 从 Checkpoint 断点续跑（可省略 `sess-` 前缀） |
+| `--list-sessions` | 列出 `sessions/` 下所有历史会话 |
+| `--show <sessionId>` | 查看某次会话的完整对话（含最终回答） |
+| `--mcp "<任务描述>"` | 启动官方 filesystem MCP server 后再运行 |
+| `--mcp --mcp-dir <目录>` | 指定 MCP server 允许访问的目录（默认当前目录） |
+| `--max-tokens <N>` | 覆盖上下文压缩的 token 上限（便于观察压缩行为） |
 
-## 五个设计决策
+运行结果在哪里看：
+- **最终回答**：任务终止后直接打印在终端（`========== Agent 最终回答 ==========` 区块）。
+- **历史会话**：`npm run agent -- --show <sessionId>`（sessionId 可只写时间戳数字）。
+- **原始记录**：`sessions/<sessionId>.jsonl`，每行一条 JSON 消息。
+- **遥测（token / 成本 / 延迟）**：需另起 AgentLens，访问 `http://localhost:8000/`。
 
-1. **为什么只读并行 / 写入串行？**
-   保守策略。只读工具没有副作用，并发执行更快且安全；写入工具会改变外部状态，并发可能引发竞态与不可预期顺序。把调度器限制为「全只读→并行 / 含写入→串行」两种状态，代码路径极清晰，易测试、易讲清，也避免了复杂的依赖分析。
+## 目录结构
 
-2. **Checkpoint 粒度为什么是每次工具调用后？**
-   因为工具的「写入」是真正产生副作用的地方。在每批工具调用执行完、还没进入下一轮 LLM 决策前保存快照，能保证：即使进程在写入后崩溃，恢复时也只会重放「尚未保存的那部分」，不会重复执行已完成的写入，最大限度保证幂等与可恢复性。
+```
+MiniAgentRuntime/
+├── src/
+│   ├── cli/
+│   │   └── index.ts              # CLI 入口（参数解析、会话/恢复/展示分发）
+│   ├── core/
+│   │   ├── agent.ts              # Agent 主循环
+│   │   ├── scheduler.ts          # 工具分区调度（只读并行 / 写入串行）
+│   │   ├── context.ts            # 上下文压缩（历史摘要化）
+│   │   ├── checkpoint.ts         # JSONL Checkpoint 持久化与恢复
+│   │   └── bootstrap.ts          # 装配：加载 .env → 注册工具 → (可选)MCP → LLM 客户端
+│   ├── tools/
+│   │   ├── registry.ts           # 工具注册表 + OpenAI schema 转换 + 执行
+│   │   └── builtin/
+│   │       ├── read_file.ts      # 只读工具
+│   │       ├── list_dir.ts       # 只读工具
+│   │       ├── search_text.ts    # 只读工具
+│   │       └── write_file.ts     # 写入工具
+│   ├── mcp/
+│   │   ├── client.ts             # 最小化 MCP 客户端（stdio + JSON-RPC）
+│   │   └── adapter.ts            # MCP 工具 → ToolDefinition 适配
+│   ├── observability/
+│   │   └── reporter.ts           # 向 AgentLens 上报 span
+│   ├── utils/
+│   │   └── schema.ts             # zod → JSON Schema 转换
+│   └── types.ts                  # 公共类型定义（消息 / 工具 / span）
+├── sessions/                     # Checkpoint 存储（运行时生成，已被 .gitignore 排除）
+├── .env.example
+├── .gitignore / .prettierignore
+├── eslint.config.js / .prettierrc.json
+├── package.json / package-lock.json
+└── tsconfig.json
+```
 
-3. **上下文压缩策略为什么保留最近 8 轮？**
-   在「信息保留」与「token 控制」之间取折中。保留太短会丢失任务关键上下文（尤其是多步任务）；保留太长则压缩毫无意义。经验上 8 轮用户对话足以覆盖绝大多数单轮任务的「读取→处理→写入」完整上下文，同时把早期历史压成一条摘要显著降低 token 占用。
+## 使用场景示例
 
-4. **MCP 通信为什么用 stdio + JSON-RPC？**
-   标准化 + 进程隔离。MCP 协议规定客户端通过子进程的 stdin/stdout 与 server 通信，JSON-RPC 2.0 是通用 RPC 格式；server 作为独立进程运行，其崩溃不影响宿主运行时，也便于做权限沙箱与资源隔离，且天然支持多语言 server。
+**读取并合并写入（观察并行 / 串行调度）**
+```bash
+npm run agent -- "读取 README.md 和 package.json，合并写入 summary.txt"
+```
+日志中会先出现「全只读 → 并行」，写文件时切换为「含写入 → 串行」。
 
-5. **上报为什么不能阻塞？**
-   可观测性是辅助能力，绝不能成为单点故障。若 AgentLens 宕机或网络抖动就导致 Agent 任务失败，那是本末倒置。因此 `reportSpan` 用 `try/catch` 包裹，失败只打日志、绝不影响主流程——可观测性应当「尽力而为」而非「强依赖」。
+**断点恢复**
+```bash
+npm run agent -- --resume sess-<时间戳>
+```
+从最近的 Checkpoint 继续，而不是从头重跑。
+
+**接入 MCP 文件系统**
+```bash
+npm run agent -- --mcp "用 MCP 工具读取 README.md 的前 20 行并列出当前目录"
+```
+首次会经 `npx -y @modelcontextprotocol/server-filesystem` 拉起 server，`initialize` 后其工具（如 `read_file`）即可像内置工具一样被调用。
+
+**观察上下文压缩**
+```bash
+npm run agent -- --max-tokens 50 "反复读取大文件并总结"
+```
+把 token 上限压到很低，可看到 `[上下文] 触发压缩...` 日志与历史摘要。
+
+## 扩展运行时
+
+### 新增一个内置工具
+
+1. 在 `src/tools/builtin/` 下实现一个 `ToolDefinition` 并导出；
+2. 在 `src/tools/registry.ts` 的 `registerBuiltinTools()` 中 `registry.register(...)`。
+
+```ts
+import { z } from 'zod';
+import { ToolDefinition } from '../types';
+
+export const myTool: ToolDefinition = {
+  name: 'my_tool',
+  description: '一句话说明这个工具能做什么',
+  parameters: z.object({ path: z.string() }), // zod 自动推导 JSON Schema 并做参数校验
+  isReadOnly: true,        // true → 参与并行调度；false（写入类）→ 走串行调度
+  source: 'builtin',
+  handler: async (args) => {
+    const { path } = args as { path: string };
+    // ... 执行逻辑
+    return '返回给 LLM 的结果文本';
+  },
+};
+```
+
+> 同名工具「后注册覆盖先注册」，MCP 工具借此安全替换内置 `read_file` / `write_file`。
+
+### 切换 / 接入其它 LLM
+
+运行时使用 `openai` SDK，只需换 `ZHIPU_BASE_URL` 与 `ZHIPU_MODEL` 指向任意 **OpenAI 兼容**端点即可（例如本地 Ollama、其它兼容网关），无需改代码：
+
+```bash
+# .env
+ZHIPU_BASE_URL=https://your-openai-compatible-endpoint/v1
+ZHIPU_MODEL=your-model-id
+```
+
+### 接入更多 MCP server
+
+`--mcp` 默认拉起官方 filesystem server。要换成其它 MCP server，改 `src/core/bootstrap.ts` 中 `new MCPClient(...)` 的启动命令（命令 + 参数 + 是否 `shell`）。客户端走 stdio + JSON-RPC，协议层与具体 server 无关。
+
+## 运行机制速览（供读码参考）
+
+- **调度**：每轮 LLM 返回若干 `tool_calls`，若全部 `isReadOnly` 则并发执行，否则整批串行。
+- **压缩**：`src/core/context.ts` 在 token 估算超阈值时，把「最近 8 轮 user 之前的消息」摘要成一条 `system` 摘要消息；历史不足 8 轮则不插入空摘要。
+- **Checkpoint**：每批工具调用执行完、进入下一轮 LLM 之前，`src/core/checkpoint.ts` 把当前消息数组追加写入 `sessions/<sessionId>.jsonl`。`--resume` 时直接读回该文件续跑。
+- **上报**：`src/observability/reporter.ts` 在每次 LLM 调用后 `POST ${AGENTLENS_BASE}/api/traces`，`try/catch` 包裹，失败仅告警、不影响主流程。`status` 取值 `success | error | timeout`，`metadata.source` 固定为 `MINI_AGENT_RUNTIME`。
 
 ## 与 AgentLens 的关系
 
-- **MiniAgentRuntime** 是「运行时」：负责驱动 Agent 主循环、调度工具、压缩上下文、做 Checkpoint，并在每次 LLM 调用时产出 span。
-- **AgentLens** 是「可观测后端」：接收 Runtime 上报的 span（接口 `POST /api/traces`），存入数据库并提供仪表盘。
-- 两者通过 `metadata.source = 'MINI_AGENT_RUNTIME'` 关联，后端可据此筛选、聚合本运行时的全部调用记录（对应验收 AC15 / AC17）。
+- **MiniAgentRuntime** 是「运行时」：驱动主循环、调度工具、压缩上下文、做 Checkpoint，并在每次 LLM 调用时产出 span。
+- **AgentLens** 是「可观测后端」：接收上报的 span（接口 `POST /api/traces`），入库并提供仪表盘。
+- 两者通过 `metadata.source = 'MINI_AGENT_RUNTIME'` 关联；后端可据此筛选、聚合本运行时的全部调用记录。
+- AgentLens 是**可选**的——没启动时，Runtime 照常工作，只是没有遥测面板。
 
-## 验收点（Acceptance Criteria）速览
+## 常见问题
 
-| 阶段 | 验收项 |
-| :--- | :--- |
-| 一 核心循环 | AC1 编译 / AC2 CLI 启动 / AC3 循环终止 / AC4 工具执行 |
-| 二 调度策略 | AC5 全只读并行 / AC6 含写入串行 / AC7 混合正确 |
-| 三 MCP 集成 | AC8 连接 / AC9 列出 / AC10 调用 |
-| 四 上下文与 Checkpoint | AC11 压缩 / AC12 保存 / AC13 恢复 / AC14 列表 |
-| 五 可观测性 | AC15 上报 / AC16 失败不阻塞 / AC17 仪表盘可见 |
-| 六 文档 | AC18 README 完整 / AC19 五个设计决策可解释 |
+- **启动就报错「缺少 ZHIPU_API_KEY」**：复制 `.env.example` 为 `.env` 并填入真实 Key。
+- **`--mcp` 卡住 / 报找不到命令**：首次需 `npx -y @modelcontextprotocol/server-filesystem`，确认本机能访问 npm 源。
+- **想看 token / 成本**：另起 AgentLens 后端（默认 `http://localhost:8000`），Runtime 自动上报。
+- **代码格式 / 规范**：`npm run format` 格式化，`npm run lint` 检查（当前 ESLint 仅 `no-explicit-any` 为 warning，不阻断）。
