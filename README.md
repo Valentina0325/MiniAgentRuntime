@@ -2,7 +2,6 @@
 
 > 一个**零依赖**（不依赖 LangChain 或任何 Agent 框架）的 TypeScript Agent 运行时。自己实现 Agent 主循环、工具调度、上下文压缩、Checkpoint 恢复与可观测上报——适合想看清「Agent 运行时到底怎么转」的开发者直接读源码、改源码。
 
-如果想先建立整体认知，见同仓库的 [`MiniAgentRuntime 项目介绍书.md`](./MiniAgentRuntime%20项目介绍书.md)（定位、架构、对外契约、接手阅读顺序）。
 
 ## 特性
 
